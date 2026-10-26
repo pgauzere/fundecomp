@@ -1,0 +1,29 @@
+# R session files and generated output
+.Rhistory
+.RData
+R/.Rhistory
+Rplots.pdf
+
+# RStudio and editor state
+.Rproj.user/
+.vscode/
+
+# Package build and check artefacts
+build/
+*.Rcheck/
+..Rcheck/
+*.tar.gz
+*.log
+
+# Local configuration and credentials
+.Renviron
+.Rprofile
+.env
+.env.*
+*.pem
+*.key
+
+# Local project material that is not part of the distributable package
+reports/
+fundecomp_logo.svg
+logo.png

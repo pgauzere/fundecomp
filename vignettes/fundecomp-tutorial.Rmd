@@ -1,0 +1,462 @@
+---
+title: "A practical guide to decomposing functional change"
+author: "fundecomp authors"
+output:
+  rmarkdown::html_vignette:
+    toc: true
+    toc_depth: 2
+vignette: >
+  %\VignetteIndexEntry{A practical guide to decomposing functional change}
+  %\VignetteEngine{ knitr::rmarkdown }
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE,
+                      fig.width = 8, fig.height = 5, dpi = 120,
+                      fig.align = "center")
+library(fundecomp)
+library(ggplot2)
+library(patchwork)
+
+component_colours <- c(
+  N = "#0072B2", aggregation = "#E69F00", SAD = "#009E73",
+  traits = "#CC79A7", ITV = "#56B4E9", TA = "#D55E00"
+)
+component_labels <- c(
+  N = "Total abundance (N)", aggregation = "Sample allocation",
+  SAD = "Species abundance distribution (SAD)",
+  traits = "Species trait distribution (STD)",
+  ITV = "Intraspecific trait variation (ITV)",
+  TA = "Trait–abundance association (T-A)"
+)
+tutorial_theme <- theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom", panel.grid.minor = element_blank(),
+        plot.title = element_text(face = "bold"),
+        strip.text = element_text(face = "bold"))
+```
+
+## Why decompose a change in functional structure?
+
+Let’s start with a familiar ecological question: a community-weighted mean (CWM) trait value has changed between surveys. Did the community gain individuals, become dominated by different species, or change the way abundance is associated with species traits? The observed metric alone cannot tell us.
+
+`fundecomp` separates a contrast into contributions associated with changes in total abundance (N), allocation among sampling units (called aggregation in the package), the species abundance distribution (SAD), the species trait distribution (STD), and trait–abundance association (T-A). These are mathematical contributions under a specified replacement design. They help describe how the observed contrast is assembled, but they do not identify causal effects.
+
+We will use the small `census` and `species` teaching data included with the package. They come from the [`s3cR` example](https://github.com/pgauzere/s3cR) and describe four sites, three survey dates and four species. The `size` column is the species-level trait used here. This compact example is useful for learning the workflow, although it is not a substitute for a larger ecological study.
+
+```{r prepare-data}
+data("census", package = "fundecomp")
+data("species", package = "fundecomp")
+
+head(census)
+species
+
+community <- data.frame(
+  series = "woodland",
+  time = census$date,
+  sample = census$site,
+  species = census$species,
+  abundance = census$n
+)
+
+# Use size as the single species-level trait in this tutorial.
+species_traits <- species[, c("species", "size")]
+
+x <- make_fundecomp_input(
+  long = community,
+  traits = species_traits,
+  species_col = "species",
+  count_data = TRUE
+)
+```
+
+## 1. What changed between the first and last survey?
+
+Before asking what drove a change, let’s see whether the functional metric changed at all. We calculate CWM at each survey date using all four sites, then compare the first and last dates. CWM describes the abundance-weighted average position along the size trait axis.
+
+```{r observed-cwm}
+metric_data <- merge(community, species_traits, by = "species")
+observed_cwm <- do.call(rbind, lapply(sort(unique(metric_data$time)), function(year) {
+  at_time <- metric_data[metric_data$time == year, ]
+  data.frame(time = year,
+             CWM = weighted.mean(at_time$size, at_time$abundance))
+}))
+
+ggplot(observed_cwm, aes(time, CWM)) +
+  geom_line(colour = "#4D4D4D", linewidth = 0.7) +
+  geom_point(colour = "#0072B2", size = 2.7) +
+  scale_x_continuous(breaks = observed_cwm$time) +
+  labs(x = "Survey date", y = "Community-weighted mean size",
+       caption = "All four sites are included at each survey date.") +
+  tutorial_theme
+
+observed_change <- tail(observed_cwm$CWM, 1) - observed_cwm$CWM[1]
+observed_change
+```
+
+The endpoint CWM change is `r round(observed_change, 5)`. Now we can ask how the package’s component replacements allocate this contrast. At full effort, `decompose_fmetric_change()` compares the complete endpoint communities. The component estimates can be inspected in the result table, and `validate_decomposition()` checks that the contributions reconstruct the relevant contrast.
+
+```{r first-decomposition}
+cwm_change <- decompose_fmetric_change(
+  x,
+  reference = list(series = "woodland", time = min(community$time)),
+  focal = list(series = "woodland", time = max(community$time)),
+  metric = "CWM",
+  trait = "size",
+  effort_unit = "full",
+  method = "mobr_path",
+  n_rep = 1,
+  seed = 42
+)
+
+component_results <- subset(cwm_change$curves, effort == max(effort),
+                            select = c(component, component_label, estimate))
+knitr::kable(component_results, digits = 5, row.names = FALSE,
+             col.names = c("Component", "Meaning", "Contribution"))
+
+validation <- validate_decomposition(cwm_change)
+data.frame(
+  passed = validation$passed,
+  checks = nrow(validation$check),
+  failed = sum(validation$check$status == "failed"),
+  maximum_reconstruction_error = max(abs(cwm_change$curves$reconstruction_error))
+)
+get_fdelta_stats(cwm_change)
+
+plot(cwm_change, type = "contributions") +
+  labs(x = "Contribution to endpoint CWM change")
+```
+
+The observed CWM rises by about 0.02476 size units. The sequential path assigns +0.03706 to T-A and −0.01316 to SAD, with +0.00086 from N and zero from STD and sample allocation. The net change is smaller than the positive T-A contribution because SAD partly offsets it. This is a useful first lesson: the endpoint change is the net result of contributions that can oppose one another. Since CWM divides the abundance-weighted trait total by total abundance, multiplying every count by the same factor would leave it unchanged, which helps explain why N contributes little here.
+
+## 2. What changed in community organisation?
+
+The previous table describes contributions to CWM. It does not show the observed changes in the community components themselves. `extract_component_changes()` returns endpoint descriptions, while `plot_component_changes()` visualises them. This distinction matters: a large change in a component need not make a large contribution to a particular metric.
+
+```{r observed-components, fig.width=10, fig.height=8}
+observed_parts <- extract_component_changes(
+  x,
+  reference = list(series = "woodland", time = min(community$time)),
+  focal = list(series = "woodland", time = max(community$time))
+)
+
+component_plots <- plot_component_changes(
+  observed_parts,
+  traits = "size",
+  colours = c(reference = "#0072B2", focal = "#D55E00"),
+  state_labels = c(reference = "First survey", focal = "Last survey"),
+  combine = TRUE
+)
+component_plots$combined
+```
+
+N is the total number of recorded individuals. SAD describes how those individuals are distributed among species, without attaching trait values to species. STD is the distribution of species-level trait values, with each species represented once. T-A describes how abundance ranks align with the trait axis. Sample allocation describes how individuals are distributed among the four sites. Here “aggregation” refers to the defined sampling units. As no spatial coordinates are supplied, it should not be read as a measure of geographic clustering.
+
+For example, SAD can change substantially while its contribution to CWM remains modest if the abundance redistribution occurs among species with similar trait values. Conversely, changes in the alignment between abundance and trait values can shift CWM even where the species trait values themselves do not change.
+
+## 3. Does the answer depend on the functional metric?
+
+CWM describes functional position. Functional dispersion (FDis) describes the abundance-weighted distance of species from the community’s trait centroid. The same community changes can therefore matter differently depending on the ecological property we want to understand.
+
+```{r metric-comparison}
+fdis_change <- decompose_fmetric_change(
+  x,
+  reference = list(series = "woodland", time = min(community$time)),
+  focal = list(series = "woodland", time = max(community$time)),
+  metric = "FDis",
+  trait = "size",
+  effort_unit = "full",
+  method = "mobr_path",
+  n_rep = 1,
+  seed = 42
+)
+
+metric_contributions <- rbind(
+  transform(subset(cwm_change$curves, effort == max(effort)), metric = "CWM"),
+  transform(subset(fdis_change$curves, effort == max(effort)), metric = "FDis")
+)
+metric_contributions$component <- factor(
+  metric_contributions$component,
+  levels = names(component_colours)
+)
+
+ggplot(metric_contributions,
+       aes(estimate, component, colour = component)) +
+  geom_vline(xintercept = 0, colour = "grey55") +
+  geom_point(size = 2.5) +
+  facet_wrap(~metric, scales = "free_x") +
+  scale_colour_manual(values = component_colours,
+                      labels = component_labels, drop = FALSE) +
+  scale_y_discrete(labels = component_labels) +
+  labs(x = "Sequential contribution", y = NULL, colour = NULL,
+       caption = "Each panel uses its own horizontal scale.") +
+  tutorial_theme
+```
+
+The observed CWM rises by 0.02476, and FDis rises by about 0.03550. For both metrics, SAD opposes a positive T-A contribution, but the allocated amounts differ: SAD is −0.01316 and T-A +0.03706 for CWM, compared with −0.02109 and +0.05531 for FDis. CWM tracks movement along the size axis, while FDis tracks changes in spread around the abundance-weighted centre. A component can therefore contribute differently to the functional property being studied. Other available metrics include `CWV` (abundance-weighted trait variance), `FRic`, richness and trait sum. Use `available_fmetrics()` to see the metrics registered in your installation.
+
+## 4. When is a partial decomposition useful?
+
+Sometimes a researcher has a focused question about only a few community properties. Setting `components` asks for a conditional contrast in which the selected components change and the others are retained at their reference settings. It is not the full endpoint change with some bars removed.
+
+Here we retain only N and SAD. This asks what happens to CWM when total abundance and species dominance are updated while site allocation, STD and T-A remain at their reference values.
+
+```{r partial-decomposition}
+partial_change <- decompose_fmetric_change(
+  x,
+  reference = list(series = "woodland", time = min(community$time)),
+  focal = list(series = "woodland", time = max(community$time)),
+  metric = "CWM",
+  trait = "size",
+  components = c("N", "SAD"),
+  effort_unit = "full",
+  method = "mobr_path",
+  n_rep = 1,
+  seed = 42
+)
+
+partial_change$curves[partial_change$curves$effort == max(partial_change$curves$effort),
+                      c("component", "estimate", "partial_change",
+                        "observed_total_change", "remaining_difference")]
+plot(partial_change, type = "reconstruction")
+```
+
+Here N and SAD reconstruct a conditional contrast of about −0.01230, opposite in direction to the complete endpoint change of +0.02476. The remaining difference is the arithmetic gap between that conditional contrast and the complete endpoint change. This is useful when the scientific question deliberately holds other components fixed, but the partial result should not be presented as a complete accounting of the observed change.
+
+## 5. How do contributions evolve through time?
+
+An endpoint comparison hides the path between surveys. `decompose_fmetric_ts()` supports two reference conventions. `time_reference = "first"` compares every later date with the first survey, giving cumulative contrasts. `time_reference = "previous"` compares each date with its predecessor, giving interval changes. The first view asks how the community differs from its starting state; the second asks how it changed from one survey to the next.
+
+```{r temporal-decomposition, fig.width=9, fig.height=7}
+cumulative <- decompose_fmetric_ts(
+  x, metric = "CWM", series = "woodland",
+  time_reference = "first", trait = "size",
+  effort_unit = "full", method = "mobr_path",
+  n_rep = 1, seed = 42
+)
+annual <- decompose_fmetric_ts(
+  x, metric = "CWM", series = "woodland",
+  time_reference = "previous", trait = "size",
+  effort_unit = "full", method = "mobr_path",
+  n_rep = 1, seed = 42
+)
+
+cumulative$curves$component <- factor(cumulative$curves$component,
+                                      levels = names(component_colours))
+annual$curves$component <- factor(annual$curves$component,
+                                  levels = names(component_colours))
+
+plot_temporal <- function(data, title) {
+  ggplot(data, aes(time_focal, estimate, colour = component,
+                   group = component)) +
+    geom_hline(yintercept = 0, colour = "grey60") +
+    geom_line(linewidth = 0.7) +
+    geom_point(size = 1.8) +
+    facet_wrap(~component, scales = "free_y", ncol = 1,
+               labeller = as_labeller(component_labels)) +
+    scale_colour_manual(values = component_colours, guide = "none") +
+    scale_x_discrete(breaks = sort(unique(as.character(data$time_focal)))) +
+    labs(title = title, x = "Focal survey date", y = "CWM contribution") +
+    tutorial_theme
+}
+
+plot_temporal(cumulative$curves, "Cumulative contrast from the first survey")
+plot_temporal(annual$curves, "Contrast with the previous survey")
+```
+
+The upper plot accumulates departures from the first survey; the lower plot describes consecutive changes. A contribution that stays positive in the cumulative view can still be negative in an individual interval. Keeping these estimands separate prevents us from describing a cumulative shift as if it were a repeated annual effect.
+
+## 6. Does the result depend on sampling effort?
+
+The endpoint analysis used all four sites. What if we had sampled one, two or three sites? Contributions can depend on effort because small samples may represent the endpoint communities differently. We can examine this with sample-based accumulation, using paired replicates to compare the endpoints at each level.
+
+```{r effort-decomposition, fig.width=9, fig.height=8}
+effort_change <- decompose_fmetric_change(
+  x,
+  reference = list(series = "woodland", time = min(community$time)),
+  focal = list(series = "woodland", time = max(community$time)),
+  metric = "CWM",
+  trait = "size",
+  effort = 1:4,
+  effort_unit = "sample",
+  method = "mobr_path",
+  n_rep = 20,
+  seed = 42
+)
+
+plot(effort_change, type = "curves") +
+  scale_x_continuous(breaks = 1:4,
+                     labels = c("1 site", "2 sites", "3 sites", "4 sites (all)")) +
+  labs(x = "Number of sampled sites",
+       caption = "Shading shows the 2.5th–97.5th percentiles across paired accumulation replicates, not confidence intervals.")
+```
+
+In these data, the mean aggregation contribution is negative at one and two sites, slightly positive at three sites and zero when all four sites are included. Its intervals are wide at low effort, so that direction is sensitive to which sites enter the accumulation. SAD stays close to −0.013 across effort, while T-A remains positive on average. These ribbons describe variation among the 20 accumulation replicates under the chosen sampling design. They are not confidence intervals for a population parameter. At four sites the analysis reaches full sampling effort. Sampling effort here means number of sites included; it does not automatically represent geographic scale.
+
+You can also inspect the metric accumulation curve for one state directly. `rarefy_community()` uses the same effort units and returns the replicate values as an attribute for further inspection.
+
+```{r rarefaction}
+rarefied <- rarefy_community(
+  x,
+  state = min(community$time),
+  series = "woodland",
+  metric = "CWM",
+  trait = "size",
+  effort = 1:4,
+  effort_unit = "sample",
+  n_rep = 20,
+  seed = 42
+)
+
+ggplot(rarefied, aes(effort, value)) +
+  geom_line(colour = "#4D4D4D") +
+  geom_point(colour = "#0072B2", size = 2) +
+  scale_x_continuous(breaks = 1:4,
+                     labels = c("1 site", "2 sites", "3 sites", "4 sites")) +
+  labs(x = "Number of sampled sites", y = "Accumulated CWM",
+       caption = "Points show means across 20 sample-accumulation replicates.") +
+  tutorial_theme
+```
+
+## 7. Does the order of component replacement matter?
+
+The standard decomposition follows a chosen sequence of component replacements. When components interact, a component’s marginal contribution can depend on which properties have already been updated. Shapley allocation addresses this order dependence by averaging each component’s marginal contribution across possible replacement orders. This is an allocation convention, not a causal analysis.
+
+There are five components in this example, so exact Shapley estimation evaluates all 5! = 120 orders. We compare it with the standard sequential path for the same CWM contrast.
+
+```{r shapley-comparison}
+cwm_shapley <- shapley_decomposition(cwm_change, exact = TRUE)
+
+allocation_comparison <- rbind(
+  data.frame(component = cwm_change$curves$component[
+    cwm_change$curves$effort == max(cwm_change$curves$effort)],
+    estimate = cwm_change$curves$estimate[
+      cwm_change$curves$effort == max(cwm_change$curves$effort)],
+    allocation = "Sequential"),
+  data.frame(component = cwm_shapley$curves$component[
+    cwm_shapley$curves$effort == max(cwm_shapley$curves$effort)],
+    estimate = cwm_shapley$curves$estimate[
+      cwm_shapley$curves$effort == max(cwm_shapley$curves$effort)],
+    allocation = "Shapley")
+)
+allocation_comparison <- unique(allocation_comparison)
+allocation_comparison$component <- factor(allocation_comparison$component,
+                                           levels = names(component_colours))
+
+ggplot(allocation_comparison,
+       aes(estimate, component, colour = component, shape = allocation)) +
+  geom_vline(xintercept = 0, colour = "grey60") +
+  geom_point(position = position_dodge(width = 0.45), size = 2.8) +
+  scale_colour_manual(values = component_colours,
+                      labels = component_labels, drop = FALSE) +
+  scale_y_discrete(labels = component_labels) +
+  labs(x = "Contribution to CWM change", y = NULL,
+       colour = "Component", shape = "Allocation rule") +
+  tutorial_theme
+```
+
+Compare the SAD and T-A estimates across the two allocation rules. SAD changes from −0.01316 on the sequential path to +0.00405 under Shapley allocation, while T-A falls from +0.03706 to +0.02032. Thus even the sign assigned to SAD depends on replacement order. Averaging over orders redistributes shared changes because the order-specific marginal effects differ. That sensitivity shows that these components are not fully separable for this contrast. It does not indicate sampling uncertainty, and a Shapley value should not be described as the effect caused by a component.
+
+When the number of components is large, exact enumeration becomes expensive because the number of orders grows factorially. Approximate Shapley estimation samples orders. For reproducibility, specify both the number of orders and a seed.
+
+```{r approximate-shapley}
+cwm_shapley_approx <- shapley_decomposition(
+  cwm_change, exact = FALSE, n_orders = 30, seed = 42
+)
+subset(cwm_shapley_approx$curves,
+       effort == max(effort), select = c(component, estimate))
+```
+
+## 8. A few useful extensions
+
+The package includes tools for checking component constraints and describing pools. A regional pool can be summarised with `make_fundecomp_pool()`, but current decomposition functions use the observed reference and focal states. The pool object is descriptive and is not a counterfactual baseline for those decompositions.
+
+```{r extensions}
+# Inspect the available metric names.
+available_fmetrics()
+
+# Randomise sample allocation while preserving sample and species totals.
+first_comm <- x$comm[x$meta$time == min(community$time), , drop = FALSE]
+random_aggregation <- null_aggregation(first_comm, seed = 42, n_swap = 500)
+attr(random_aggregation, "constraints")
+
+# Break the trait–abundance pairing while preserving each marginal distribution.
+first_state <- list(
+  comm = first_comm,
+  traits = x$traits[colnames(first_comm), , drop = FALSE]
+)
+broken_link <- break_trait_abundance_link(first_state, seed = 42)
+broken_link$constraints
+
+# Make a descriptive pool summary. This is not passed into the endpoint decomposition.
+pool_summary <- make_fundecomp_pool(x, pool_scope = "series", series = "woodland")
+names(pool_summary)
+```
+
+You can register a metric for a focused question. The function receives abundance and traits and should return one numeric value. Here we register the abundance-weighted mean of the supplied trait, which is intentionally equivalent to the built-in CWM for illustration.
+
+```{r custom-metric}
+weighted_trait_mean <- function(abundance, traits, trait = NULL) {
+  trait_values <- traits[[trait[1]]]
+  sum(abundance * trait_values) / sum(abundance)
+}
+
+register_fmetric("tutorial_weighted_mean", weighted_trait_mean,
+                 required_traits = 1L,
+                 effort_unit = c("individual", "sample", "full"),
+                 min_species = 1L)
+available_fmetrics()
+```
+
+The `species` data also contain `size_v`, but these are species-level values, not individual measurements. They cannot be used to reconstruct individual trait distributions. When individual measurements are available, pass them through `trait_observations` and choose a metric that can respond to ITV. The following deliberately simulated example shows the required data structure. It is not an analysis of the `s3cR` observations.
+
+```{r itv-example}
+itv_community <- data.frame(
+  series = "simulated", time = rep(c(1, 2), each = 2),
+  sample = rep("plot1", 4), species = rep(c("sp1", "sp2"), 2),
+  abundance = c(3, 3, 3, 3)
+)
+itv_traits <- data.frame(species = c("sp1", "sp2"), size = c(10, 15))
+itv_observations <- data.frame(
+  series = "simulated",
+  species = rep(c("sp1", "sp2"), each = 6),
+  time = rep(rep(c(1, 2), each = 3), 2),
+  size = c(9, 10, 11, 8, 10, 12, 14, 15, 16, 13, 15, 17)
+)
+
+itv_input <- make_fundecomp_input(
+  long = itv_community,
+  traits = itv_traits,
+  trait_observations = itv_observations,
+  species_col = "species",
+  count_data = TRUE
+)
+itv_result <- decompose_fmetric_change(
+  itv_input,
+  reference = list(series = "simulated", time = 1),
+  focal = list(series = "simulated", time = 2),
+  metric = "CWV", trait = "size", effort_unit = "full",
+  method = "mobr_path", n_rep = 1, seed = 42
+)
+subset(itv_result$curves, effort == max(effort),
+       select = c(component, estimate))
+```
+
+## Choosing an analysis
+
+Use a complete decomposition when you want all supported components to reconstruct the endpoint contrast. Use a partial decomposition when you want a conditional contrast with selected components changing and the others held at reference settings. Choose CWM for functional position and metrics such as FDis or CWV for aspects of functional spread. Use temporal decomposition to distinguish cumulative departures from consecutive changes, and sample-based accumulation when you need to assess sensitivity to the number of sampling units. Use sequential allocation for the package’s specified path, and Shapley allocation when you want an order-averaged allocation and can support its computational cost.
+
+In every analysis, report the trait data, metric, reference and focal states, component set and order, effort unit, accumulation settings, and allocation rule. Interpret contributions as mathematical summaries of the chosen comparison. Their ecological meaning depends on the sampling units and counterfactual construction, and they do not establish ecological mechanisms by themselves.
+
+| Function | Purpose |
+|:--|:--|
+| `make_fundecomp_input()` | Validate and organise community, trait and optional individual trait data |
+| `decompose_fmetric_change()` | Decompose one endpoint contrast |
+| `extract_component_changes()` / `plot_component_changes()` | Describe observed component states |
+| `decompose_fmetric_ts()` | Decompose cumulative or consecutive temporal contrasts |
+| `rarefy_community()` | Estimate metric accumulation across effort |
+| `shapley_decomposition()` | Reallocate contributions across replacement orders |
+| `validate_decomposition()` | Check reconstruction and stored diagnostics |
+| `null_aggregation()` / `break_trait_abundance_link()` | Construct constrained randomised states |
+| `make_fundecomp_pool()` | Summarise a pool descriptively |
+| `available_fmetrics()` / `register_fmetric()` | Inspect built-in metrics and register a custom metric |

@@ -1,0 +1,44 @@
+Package: fundecomp
+Type: Package
+Title: Decomposition of Functional Biodiversity Change
+Version: 5.0.0
+Authors@R: person("Pierre", "Gaüzère", email = "pierre.gauzere@gmail.com",
+    role = c("aut", "cre"))
+Author: Pierre Gaüzère [aut, cre]
+Maintainer: Pierre Gaüzère <pierre.gauzere@gmail.com>
+Description: Extends the Measurement of Biodiversity framework to decompose
+    changes in functional metrics into proximate changes in total abundance,
+    spatial aggregation, the species-abundance distribution, the species-trait
+    distribution, and Trait-Abundance association. Optional individual trait
+    observations support a within-species trait variation component. Includes
+    small teaching datasets from the s3cR package.
+License: GPL-3
+Encoding: UTF-8
+Depends:
+    R (>= 4.1.0)
+Imports:
+    ggplot2,
+    mobr (>= 3.0.0),
+    stats
+Suggests:
+    geometry,
+    knitr,
+    patchwork,
+    rmarkdown,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+VignetteBuilder: knitr
+LazyData: true
+Collate:
+    'input.R'
+    'metrics.R'
+    'pool.R'
+    'decomposition.R'
+    'timeseries.R'
+    'plot.R'
+    'null_models.R'
+    'validation.R'
+    'component_changes.R'
+    'print.R'
+Roxygen: list(markdown = TRUE)
+Config/roxygen2/version: 8.1.0
