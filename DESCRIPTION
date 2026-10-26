@@ -20,6 +20,8 @@ Imports:
     ggplot2,
     mobr (>= 3.0.0),
     stats
+Remotes:
+    MoBiodiv/mobr
 Suggests:
     geometry,
     knitr,
