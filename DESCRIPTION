@@ -1,7 +1,7 @@
 Package: fundecomp
 Type: Package
 Title: Decomposition of Functional Biodiversity Change
-Version: 5.0.0
+Version: 5.0.1
 Authors@R: person("Pierre", "Gaüzère", email = "pierre.gauzere@gmail.com",
     role = c("aut", "cre"))
 Author: Pierre Gaüzère [aut, cre]

@@ -1,3 +1,9 @@
+# fundecomp 5.0.1
+
+* Declared the GitHub source for the `mobr` dependency so development tools and
+  GitHub Actions can resolve and install it when it is not available from the
+  configured package repositories.
+
 # fundecomp 0.4.0
 
 - Added `components` to endpoint and time-series decomposition interfaces.
