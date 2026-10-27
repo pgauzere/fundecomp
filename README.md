@@ -1,4 +1,4 @@
-# fundecomp
+# fundecomp <img src="man/figures/logo.png" align="right" width="140"/>
 
 `fundecomp` decomposes changes in functional metrics between observed community states into contributions from ecological components. It extends the Measurement of Biodiversity framework and reports mathematical allocations of an observed contrast, not causal effects.
 
