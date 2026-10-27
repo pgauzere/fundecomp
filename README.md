@@ -21,11 +21,18 @@ install.packages("remotes")
 
 remotes::install_github(
   "pgauzere/fundecomp",
-  upgrade = "never"
+  upgrade = "never",
+  dependencies = TRUE,
+  build_vignettes = TRUE
 )
 
 library(fundecomp)
+vignette("fundecomp-tutorial", package = "fundecomp")
 ```
+
+`remotes::install_github()` does not build package vignettes by default. The
+`build_vignettes = TRUE` option above compiles the tutorial during installation;
+`dependencies = TRUE` makes its vignette-building packages available.
 
 ## Minimal example
 
@@ -57,11 +64,11 @@ plot(result, type = "contributions")
 
 ## Main functions and documentation
 
-Use `?decompose_fmetric_change` for two-state decompositions and `?decompose_fmetric_ts` for temporal series. Other entry points include `make_fundecomp_input`, `make_fundecomp_pool`, `extract_component_changes`, `plot_component_changes`, `validate_decomposition`, `null_aggregation` and `break_trait_abundance_link`. The full tutorial is in `vignette("fundecomp-tutorial")`.
+Use `?decompose_fmetric_change` for two-state decompositions and `?decompose_fmetric_ts` for temporal series. Other entry points include `make_fundecomp_input`, `make_fundecomp_pool`, `extract_component_changes`, `plot_component_changes`, `validate_decomposition`, `null_aggregation` and `break_trait_abundance_link`. After installing with vignette building enabled, open the complete tutorial with `vignette("fundecomp-tutorial", package = "fundecomp")`. The source is available at [`vignettes/fundecomp-tutorial.Rmd`](https://github.com/pgauzere/fundecomp/blob/main/vignettes/fundecomp-tutorial.Rmd).
 
 ## Development status
 
-This package is under active methodological development. Version 5.0.0 is made available for collaborators to install and test; interfaces and methods may change as the work develops.
+This package is under active methodological development. Version 5.0.1 is made available for collaborators to install and test; interfaces and methods may change as the work develops.
 
 ## Problems and suggestions
 
